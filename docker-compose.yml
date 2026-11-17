@@ -1,0 +1,72 @@
+services:
+  sentinel-audit:
+    build: .
+    restart: unless-stopped
+    environment:
+      AUDIT_SECRET: ${AUDIT_SECRET:?Set a long random AUDIT_SECRET in the deployment environment}
+      AUDIT_HOST: 0.0.0.0
+      AUDIT_PORT: 8080
+      AUDIT_DB: /data/audit.db
+      AUDIT_REQUIRE_SCANNER_AGENT: ${AUDIT_REQUIRE_SCANNER_AGENT:-1}
+      AUDIT_COOKIE_SECURE: "1"
+      TRUST_PROXY_HEADERS: "1"
+      AUDIT_PUBLIC_URL: https://${SENTINEL_DOMAIN:?Set SENTINEL_DOMAIN to the public DNS name}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NMAP_PATH: /usr/bin/nmap
+      AUDIT_NMAP_FULL_TCP: ${AUDIT_NMAP_FULL_TCP:-true}
+      AUDIT_NMAP_UDP_TOP: ${AUDIT_NMAP_UDP_TOP:-100}
+      NMAP_TIMEOUT: ${NMAP_TIMEOUT:-900}
+      NVD_API_KEY: ${NVD_API_KEY:-}
+      NVD_TIMEOUT: ${NVD_TIMEOUT:-20}
+      NVD_RESULTS_PER_PAGE: ${NVD_RESULTS_PER_PAGE:-20}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_SSL: ${SMTP_SSL:-false}
+      CAPTCHA_SITE_KEY: ${CAPTCHA_SITE_KEY:-}
+      CAPTCHA_SECRET_KEY: ${CAPTCHA_SECRET_KEY:-}
+    expose:
+      - "8080"
+    volumes:
+      - sentinel-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    networks:
+      - sentinel-internal
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      sentinel-audit:
+        condition: service_healthy
+    environment:
+      SENTINEL_DOMAIN: ${SENTINEL_DOMAIN:?Set SENTINEL_DOMAIN to the public DNS name}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - sentinel-internal
+volumes:
+  sentinel-data:
+  caddy-data:
+  caddy-config:
+networks:
+  sentinel-internal:
+    driver: bridge

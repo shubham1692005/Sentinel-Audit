@@ -1,0 +1,50 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+google-services.json
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Databases and audit data
+**/data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Android generated files
+android/.gradle/
+android/**/build/
+*.apk
+*.aab
+local.properties
+
+# Gradle
+.gradle/
+
+# Reports and temporary files
+outputs/
+tmp/
+work/
+.pip-temp/
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# Cloudflare credentials
+cloudflared.exe
+cert.pem
+
+# OS files
+.DS_Store
+Thumbs.db

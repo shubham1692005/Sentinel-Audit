@@ -1,0 +1,525 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model & Architecture
+    // ===============================================================
+    //
+    // Application: Sentinel Audit (Enterprise Security Audit & Compliance)
+    //
+    // Context & Integration Architecture:
+    // 1. Mobile Android App (MainActivity.java):
+    //    Performs unauthenticated get() on /config/server to read the 'url'
+    //    field for dynamic backend discovery (e.g. VPS HTTPS origin).
+    // 2. Backend Sync Utility (firebase_sync.py):
+    //    Uses Firebase Admin SDK (service account / ADC) for server-to-server
+    //    export/import between SQLite and Firestore. Admin SDK calls bypass
+    //    security rules.
+    // 3. Client & Web Readers:
+    //    Direct Firestore client access requires authenticated RBAC claims:
+    //    token.admin == true or token.role in ['admin', 'auditor', 'analyst', 'viewer'].
+    //
+    // Collections and Schemas:
+    //
+    // Collection: config
+    // Document ID: server
+    // Fields:
+    //   - url: string (required, 8..500 chars, http:// or https://)
+    //   - updated_at: string | timestamp (optional, <= 60 chars)
+    //   - updated_by: string (optional, <= 150 chars)
+    //
+    // Collection: organizations
+    // Document ID: [orgId] (numeric string matching SQLite primary key)
+    // Fields:
+    //   - id: int | string (required, positive int or string 1..100, immutable)
+    //   - name: string (required, 1..200 chars)
+    //   - industry: string (optional, 0..100 chars)
+    //   - created_at: string | timestamp (optional, <= 60 chars, immutable)
+    //
+    // Collection: projects
+    // Document ID: [projectId] (numeric string matching SQLite primary key)
+    // Fields:
+    //   - id: int | string (required, positive int or string 1..100, immutable)
+    //   - organization_id: int | string (required, immutable)
+    //   - name: string (required, 1..200 chars)
+    //   - description: string (optional, 0..2000 chars)
+    //   - created_at: string | timestamp (optional, <= 60 chars, immutable)
+    //
+    // Collection: assets
+    // Document ID: [assetId] (numeric string matching SQLite primary key)
+    // Fields:
+    //   - id: int | string (required, immutable)
+    //   - project_id: int | string (required, immutable)
+    //   - name: string (required, 1..200 chars)
+    //   - hostname: string (optional, 0..255 chars)
+    //   - address: string (optional, 0..100 chars)
+    //   - asset_type: string (optional, enum: endpoint/server/cloud/mobile/network/database/other)
+    //   - criticality: string (optional, enum: low/medium/high/critical)
+    //   - owner: string (optional, 0..150 chars)
+    //   - notes: string (optional, 0..4000 chars)
+    //   - created_at: string | timestamp (optional, <= 60 chars, immutable)
+    //
+    // Collection: assessments
+    // Document ID: [assessmentId] (numeric string matching SQLite primary key)
+    // Fields:
+    //   - id: int | string (required, immutable)
+    //   - project_id: int | string (required, immutable)
+    //   - asset_id: int | string | null (optional)
+    //   - kind: string (required, 1..100 chars)
+    //   - status: string (optional, enum: queued/running/completed/failed/cancelled)
+    //   - started_at: string | timestamp (optional, <= 60 chars)
+    //   - completed_at: string | timestamp (optional, <= 60 chars)
+    //   - summary: string | map (optional, <= 20000 chars if string)
+    //   - authorized_by: int | string | null (optional)
+    //
+    // Collection: findings
+    // Document ID: [findingId] (numeric string matching SQLite primary key)
+    // Fields:
+    //   - id: int | string (required, immutable)
+    //   - project_id: int | string (required, immutable)
+    //   - assessment_id: int | string | null (optional)
+    //   - asset_id: int | string | null (optional)
+    //   - title: string (required, 1..300 chars)
+    //   - category: string (optional, 0..100 chars)
+    //   - severity: string (required, enum: info/low/medium/high/critical)
+    //   - likelihood: int | float (optional, 1..5)
+    //   - impact: int | float (optional, 1..5)
+    //   - risk_score: int | float (optional, 0..10)
+    //   - description: string (optional, 0..10000 chars)
+    //   - evidence: string | map (optional, <= 20000 chars if string)
+    //   - verified: int (optional, 0 or 1)
+    //   - cve: string (optional, 0..50 chars)
+    //   - cvss: int | float | null (optional, 0..10)
+    //   - control_ids: string | list (optional, <= 2000 chars if string, <= 100 items if list)
+    //   - remediation: string (optional, 0..10000 chars)
+    //   - status: string (optional, enum: open/in_progress/resolved/closed/accepted)
+    //   - assignee: string (optional, 0..150 chars)
+    //   - due_date: string | null (optional, 0..50 chars)
+    //   - created_at: string | timestamp (optional, <= 60 chars, immutable)
+    //   - updated_at: string | timestamp (optional, <= 60 chars)
+    //
+    // Collection: controls
+    // Document ID: [controlId] (numeric string matching SQLite primary key)
+    // Fields:
+    //   - id: int | string (required, immutable)
+    //   - framework: string (required, 1..100 chars, immutable)
+    //   - control_key: string (required, 1..100 chars, immutable)
+    //   - title: string (required, 1..300 chars)
+    //   - description: string (optional, 0..5000 chars)
+    //
+    // Collection: control_results
+    // Document ID: [resultId] (numeric string matching SQLite primary key)
+    // Fields:
+    //   - id: int | string (required, immutable)
+    //   - project_id: int | string (required, immutable)
+    //   - control_id: int | string (required, immutable)
+    //   - status: string (optional, enum: pass/fail/warning/not_assessed/not_applicable)
+    //   - evidence: string (optional, 0..10000 chars)
+    //   - assessor: string (optional, 0..150 chars)
+    //   - updated_at: string | timestamp (optional, <= 60 chars)
+    //
+    // Collection: scan_jobs
+    // Document ID: [jobId] (UUID string matching SQLite primary key)
+    // Fields:
+    //   - id: string (required, 1..100 chars, immutable)
+    //   - project_id: int | string (required, immutable)
+    //   - requested_by: int | string (required, immutable)
+    //   - kind: string (required, enum: local/network/android_device/android_adb)
+    //   - target: string (optional, 0..300 chars)
+    //   - authorized: int (optional, 0 or 1)
+    //   - public_authorized: int (optional, 0 or 1)
+    //   - status: string (optional, enum: queued/running/completed/failed/cancelled)
+    //   - progress: int | float (optional, 0..100)
+    //   - message: string (optional, 0..1000 chars)
+    //   - result: string | map (optional, <= 50000 chars if string)
+    //   - error: string (optional, 0..5000 chars)
+    //   - cancel_requested: int (optional, 0 or 1)
+    //   - retry_of: string | null (optional, 0..100 chars)
+    //   - created_at: string | timestamp (optional, <= 60 chars, immutable)
+    //   - updated_at: string | timestamp (optional, <= 60 chars)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        ('admin' in request.auth.token && request.auth.token.admin == true) ||
+        ('role' in request.auth.token && request.auth.token.role == 'admin') ||
+        ('email' in request.auth.token &&
+         'email_verified' in request.auth.token &&
+         request.auth.token.email_verified == true &&
+         request.auth.token.email in ['admin@sentinelaudit.local', 'security@sentinelaudit.local'])
+      );
+    }
+
+    function canReadAuditData() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        ('role' in request.auth.token && request.auth.token.role in ['auditor', 'analyst', 'viewer'])
+      );
+    }
+
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isIdField(val) {
+      return (val is string && val.size() > 0 && val.size() <= 100) ||
+             (val is int && val > 0);
+    }
+
+    function isRequiredId(data, field) {
+      return (field in data) && isIdField(data[field]);
+    }
+
+    function isOptionalId(data, field) {
+      return !(field in data) ||
+             data[field] == null ||
+             data[field] == '' ||
+             isIdField(data[field]);
+    }
+
+    function isRequiredString(data, field, minLen, maxLen) {
+      return (field in data) &&
+             data[field] is string &&
+             data[field].size() >= minLen &&
+             data[field].size() <= maxLen;
+    }
+
+    function isOptionalString(data, field, minLen, maxLen) {
+      return !(field in data) ||
+             data[field] == null ||
+             (data[field] is string &&
+              data[field].size() >= minLen &&
+              data[field].size() <= maxLen);
+    }
+
+    function isOptionalNumber(data, field, minVal, maxVal) {
+      return !(field in data) ||
+             data[field] == null ||
+             (data[field] is number &&
+              data[field] >= minVal &&
+              data[field] <= maxVal);
+    }
+
+    function isOptionalDate(data, field) {
+      return !(field in data) ||
+             data[field] == null ||
+             data[field] is timestamp ||
+             (data[field] is string && data[field].size() <= 60);
+    }
+
+    function isOptionalJsonStringOrMap(data, field, maxLen) {
+      return !(field in data) ||
+             data[field] == null ||
+             data[field] is map ||
+             (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    function isOptionalJsonStringOrList(data, field, maxLen, maxListItems) {
+      return !(field in data) ||
+             data[field] == null ||
+             (data[field] is list && data[field].size() <= maxListItems) ||
+             (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    function isValidUrl(url) {
+      return url is string &&
+             (url.matches("^https://.*") || url.matches("^http://.*")) &&
+             url.size() >= 8 &&
+             url.size() <= 500;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidServerConfig(data) {
+      return hasOnlyAllowedFields(data, ['url', 'updated_at', 'updated_by']) &&
+             hasRequiredFields(data, ['url']) &&
+             isRequiredString(data, 'url', 8, 500) &&
+             isValidUrl(data.url) &&
+             isOptionalDate(data, 'updated_at') &&
+             isOptionalString(data, 'updated_by', 0, 150);
+    }
+
+    function isValidOrganization(data) {
+      return hasOnlyAllowedFields(data, ['id', 'name', 'industry', 'created_at']) &&
+             hasRequiredFields(data, ['id', 'name']) &&
+             isRequiredId(data, 'id') &&
+             isRequiredString(data, 'name', 1, 200) &&
+             isOptionalString(data, 'industry', 0, 100) &&
+             isOptionalDate(data, 'created_at');
+    }
+
+    function isValidProject(data) {
+      return hasOnlyAllowedFields(data, ['id', 'organization_id', 'name', 'description', 'created_at']) &&
+             hasRequiredFields(data, ['id', 'organization_id', 'name']) &&
+             isRequiredId(data, 'id') &&
+             isRequiredId(data, 'organization_id') &&
+             isRequiredString(data, 'name', 1, 200) &&
+             isOptionalString(data, 'description', 0, 2000) &&
+             isOptionalDate(data, 'created_at');
+    }
+
+    function isValidAsset(data) {
+      return hasOnlyAllowedFields(data, [
+               'id', 'project_id', 'name', 'hostname', 'address',
+               'asset_type', 'criticality', 'owner', 'notes', 'created_at'
+             ]) &&
+             hasRequiredFields(data, ['id', 'project_id', 'name']) &&
+             isRequiredId(data, 'id') &&
+             isRequiredId(data, 'project_id') &&
+             isRequiredString(data, 'name', 1, 200) &&
+             isOptionalString(data, 'hostname', 0, 255) &&
+             isOptionalString(data, 'address', 0, 100) &&
+             (
+               !( 'asset_type' in data ) ||
+               data.asset_type == null ||
+               (data.asset_type is string && data.asset_type in ['endpoint', 'server', 'cloud', 'mobile', 'network', 'database', 'other'])
+             ) &&
+             (
+               !( 'criticality' in data ) ||
+               data.criticality == null ||
+               (data.criticality is string && data.criticality in ['low', 'medium', 'high', 'critical'])
+             ) &&
+             isOptionalString(data, 'owner', 0, 150) &&
+             isOptionalString(data, 'notes', 0, 4000) &&
+             isOptionalDate(data, 'created_at');
+    }
+
+    function isValidAssessment(data) {
+      return hasOnlyAllowedFields(data, [
+               'id', 'project_id', 'asset_id', 'kind', 'status',
+               'started_at', 'completed_at', 'summary', 'authorized_by'
+             ]) &&
+             hasRequiredFields(data, ['id', 'project_id', 'kind']) &&
+             isRequiredId(data, 'id') &&
+             isRequiredId(data, 'project_id') &&
+             isOptionalId(data, 'asset_id') &&
+             isRequiredString(data, 'kind', 1, 100) &&
+             (
+               !( 'status' in data ) ||
+               data.status == null ||
+               (data.status is string && data.status in ['queued', 'running', 'completed', 'failed', 'cancelled'])
+             ) &&
+             isOptionalDate(data, 'started_at') &&
+             isOptionalDate(data, 'completed_at') &&
+             isOptionalJsonStringOrMap(data, 'summary', 20000) &&
+             isOptionalId(data, 'authorized_by');
+    }
+
+    function isValidFinding(data) {
+      return hasOnlyAllowedFields(data, [
+               'id', 'project_id', 'assessment_id', 'asset_id', 'title',
+               'category', 'severity', 'likelihood', 'impact', 'risk_score',
+               'description', 'evidence', 'verified', 'cve', 'cvss',
+               'control_ids', 'remediation', 'status', 'assignee', 'due_date',
+               'created_at', 'updated_at'
+             ]) &&
+             hasRequiredFields(data, ['id', 'project_id', 'title', 'severity']) &&
+             isRequiredId(data, 'id') &&
+             isRequiredId(data, 'project_id') &&
+             isOptionalId(data, 'assessment_id') &&
+             isOptionalId(data, 'asset_id') &&
+             isRequiredString(data, 'title', 1, 300) &&
+             isOptionalString(data, 'category', 0, 100) &&
+             (data.severity is string && data.severity in ['info', 'low', 'medium', 'high', 'critical']) &&
+             isOptionalNumber(data, 'likelihood', 1, 5) &&
+             isOptionalNumber(data, 'impact', 1, 5) &&
+             isOptionalNumber(data, 'risk_score', 0, 10) &&
+             isOptionalString(data, 'description', 0, 10000) &&
+             isOptionalJsonStringOrMap(data, 'evidence', 20000) &&
+             isOptionalNumber(data, 'verified', 0, 1) &&
+             isOptionalString(data, 'cve', 0, 50) &&
+             isOptionalNumber(data, 'cvss', 0, 10) &&
+             isOptionalJsonStringOrList(data, 'control_ids', 2000, 100) &&
+             isOptionalString(data, 'remediation', 0, 10000) &&
+             (
+               !( 'status' in data ) ||
+               data.status == null ||
+               (data.status is string && data.status in ['open', 'in_progress', 'resolved', 'closed', 'accepted'])
+             ) &&
+             isOptionalString(data, 'assignee', 0, 150) &&
+             isOptionalString(data, 'due_date', 0, 50) &&
+             isOptionalDate(data, 'created_at') &&
+             isOptionalDate(data, 'updated_at');
+    }
+
+    function isValidControl(data) {
+      return hasOnlyAllowedFields(data, ['id', 'framework', 'control_key', 'title', 'description']) &&
+             hasRequiredFields(data, ['id', 'framework', 'control_key', 'title']) &&
+             isRequiredId(data, 'id') &&
+             isRequiredString(data, 'framework', 1, 100) &&
+             isRequiredString(data, 'control_key', 1, 100) &&
+             isRequiredString(data, 'title', 1, 300) &&
+             isOptionalString(data, 'description', 0, 5000);
+    }
+
+    function isValidControlResult(data) {
+      return hasOnlyAllowedFields(data, ['id', 'project_id', 'control_id', 'status', 'evidence', 'assessor', 'updated_at']) &&
+             hasRequiredFields(data, ['id', 'project_id', 'control_id']) &&
+             isRequiredId(data, 'id') &&
+             isRequiredId(data, 'project_id') &&
+             isRequiredId(data, 'control_id') &&
+             (
+               !( 'status' in data ) ||
+               data.status == null ||
+               (data.status is string && data.status in ['pass', 'fail', 'warning', 'not_assessed', 'not_applicable'])
+             ) &&
+             isOptionalString(data, 'evidence', 0, 10000) &&
+             isOptionalString(data, 'assessor', 0, 150) &&
+             isOptionalDate(data, 'updated_at');
+    }
+
+    function isValidScanJob(data) {
+      return hasOnlyAllowedFields(data, [
+               'id', 'project_id', 'requested_by', 'kind', 'target',
+               'authorized', 'public_authorized', 'status', 'progress',
+               'message', 'result', 'error', 'cancel_requested', 'retry_of',
+               'created_at', 'updated_at'
+             ]) &&
+             hasRequiredFields(data, ['id', 'project_id', 'requested_by', 'kind']) &&
+             isRequiredString(data, 'id', 1, 100) &&
+             isRequiredId(data, 'project_id') &&
+             isRequiredId(data, 'requested_by') &&
+             (data.kind is string && data.kind in ['local', 'network', 'android_device', 'android_adb']) &&
+             isOptionalString(data, 'target', 0, 300) &&
+             isOptionalNumber(data, 'authorized', 0, 1) &&
+             isOptionalNumber(data, 'public_authorized', 0, 1) &&
+             (
+               !( 'status' in data ) ||
+               data.status == null ||
+               (data.status is string && data.status in ['queued', 'running', 'completed', 'failed', 'cancelled'])
+             ) &&
+             isOptionalNumber(data, 'progress', 0, 100) &&
+             isOptionalString(data, 'message', 0, 1000) &&
+             isOptionalJsonStringOrMap(data, 'result', 50000) &&
+             isOptionalString(data, 'error', 0, 5000) &&
+             isOptionalNumber(data, 'cancel_requested', 0, 1) &&
+             isOptionalString(data, 'retry_of', 0, 100) &&
+             isOptionalDate(data, 'created_at') &&
+             isOptionalDate(data, 'updated_at');
+    }
+
+    // ===============================================================
+    // Rules Definition
+    // ===============================================================
+
+    // 1. Dynamic Server Configuration (for Mobile App Discovery)
+    // Mobile client reads config/server unauthenticated to locate the backend server.
+    match /config/server {
+      allow get: if true;
+      allow list: if false;
+      allow create: if isAdmin() && isValidServerConfig(request.resource.data);
+      allow update: if isAdmin() && isValidServerConfig(request.resource.data);
+      allow delete: if false;
+    }
+
+    // Prevent access to any other configuration document
+    match /config/{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Organizations Collection
+    match /organizations/{orgId} {
+      allow read: if canReadAuditData();
+      allow create: if isAdmin() && isValidOrganization(request.resource.data);
+      allow update: if isAdmin() &&
+                       areImmutableFieldsUnchanged(['id', 'created_at']) &&
+                       isValidOrganization(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // 3. Projects Collection
+    match /projects/{projectId} {
+      allow read: if canReadAuditData();
+      allow create: if isAdmin() && isValidProject(request.resource.data);
+      allow update: if isAdmin() &&
+                       areImmutableFieldsUnchanged(['id', 'organization_id', 'created_at']) &&
+                       isValidProject(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // 4. Assets Collection
+    match /assets/{assetId} {
+      allow read: if canReadAuditData();
+      allow create: if isAdmin() && isValidAsset(request.resource.data);
+      allow update: if isAdmin() &&
+                       areImmutableFieldsUnchanged(['id', 'project_id', 'created_at']) &&
+                       isValidAsset(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // 5. Assessments Collection
+    match /assessments/{assessmentId} {
+      allow read: if canReadAuditData();
+      allow create: if isAdmin() && isValidAssessment(request.resource.data);
+      allow update: if isAdmin() &&
+                       areImmutableFieldsUnchanged(['id', 'project_id']) &&
+                       isValidAssessment(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // 6. Vulnerability & Security Findings Collection
+    match /findings/{findingId} {
+      allow read: if canReadAuditData();
+      allow create: if isAdmin() && isValidFinding(request.resource.data);
+      allow update: if isAdmin() &&
+                       areImmutableFieldsUnchanged(['id', 'project_id', 'created_at']) &&
+                       isValidFinding(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // 7. Compliance Controls Catalog
+    match /controls/{controlId} {
+      allow read: if canReadAuditData();
+      allow create: if isAdmin() && isValidControl(request.resource.data);
+      allow update: if isAdmin() &&
+                       areImmutableFieldsUnchanged(['id', 'framework', 'control_key']) &&
+                       isValidControl(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // 8. Control Assessment Results
+    match /control_results/{resultId} {
+      allow read: if canReadAuditData();
+      allow create: if isAdmin() && isValidControlResult(request.resource.data);
+      allow update: if isAdmin() &&
+                       areImmutableFieldsUnchanged(['id', 'project_id', 'control_id']) &&
+                       isValidControlResult(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // 9. Automated Scan Jobs
+    match /scan_jobs/{jobId} {
+      allow read: if canReadAuditData();
+      allow create: if isAdmin() && isValidScanJob(request.resource.data);
+      allow update: if isAdmin() &&
+                       areImmutableFieldsUnchanged(['id', 'project_id', 'requested_by', 'created_at']) &&
+                       isValidScanJob(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Default Deny: All unmatched collections and documents are strictly forbidden
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
